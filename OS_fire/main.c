@@ -16,6 +16,7 @@
 #define  FREE        0         //FAT中盘块空闲标志
 #define  ROOTBLOCKNUM  2   //根目录区所占盘块总数
 #define  MAXOPENFILE    10   //最多同时打开文件个数
+#define  MAXTEXT 10000
 
 typedef struct FCB //仿照FAT16设置的
 {
@@ -24,7 +25,7 @@ typedef struct FCB //仿照FAT16设置的
     unsigned char attribute;//文件属性字段：为简单起见，我们只为文件设置了两种属性：
     //值为0时表示目录文件，值为1时表示数据文件
     unsigned short time;//文件创建时间
-    unsigned short data;//文件创建日期
+    unsigned short date;//文件创建日期
     unsigned short first;//文件起始盘块号
     unsigned long length;//文件长度（字节数）
     char free;//表示目录项是否为空，若值为0，表示空，值为1，表示已分配
@@ -41,7 +42,7 @@ typedef struct USEROPEN
     char exname[3];//文件扩展名
     unsigned char attribute;//文件属性：值为0时表示目录文件，值为1时表示数据文件
     unsigned short time;//文件创建时间
-    unsigned short data;//文件创建日期
+    unsigned short date;//文件创建日期
     unsigned short first;//文件起始盘块号
     unsigned long length;//文件长度（对数据文件是字节数，对目录文件可以是目录项个数）
     char free;//表示目录项是否为空，若值为0，表示空，值为1，表示已分配
@@ -55,12 +56,14 @@ typedef struct USEROPEN
     char fcbstate; //是否修改了文件的FCB的内容，如果修改了置为1，否则为0
     char topenfile; //表示该用户打开表项是否为空，若值为0，表示为空，否则表示已
     //被某打开文件占据
+	char father;
 }useropen;
 
 typedef struct BLOCK0  //引导块内容
 {
     //存储一些描述信息，如磁盘块大小、磁盘块数量、最多打开文件数等、
-    char information[200];
+	unsigned short fbnum;
+	char information[200];
     unsigned short root; //根目录文件的起始盘块号
     unsigned char *startblock; //虚拟磁盘上数据区开始位置
 }block0;
@@ -68,30 +71,869 @@ typedef struct BLOCK0  //引导块内容
 unsigned char *myvhard; //指向虚拟磁盘的起始地址
 useropen openfilelist[MAXOPENFILE];//   用户打开文件表数组
 useropen *ptrcurdir;// 指向用户打开文件表中的当前目录所在打开文件表项的位置；
+int curdir;
 char currentdir[80];//     记录当前目录的目录名（包括目录的路径）
 unsigned char* startp;//   记录虚拟磁盘上数据区开始位置
 unsigned char buffer[SIZE];
 
+char filename[] = "c:\\myfilesys";
+
 void startsys(){
-    FILE *fp;
-    int i;
-    myvhard=(unsigned char *)malloc(SIZE);
-    memset(myvhard, 0, SIZE);
-    fp=fopen(filename,"r");
-    
-    if(fp){
-        fread(buffer,SIZE,1,fp);
-        fclose(fp);
-        if(buffer[0]!=0xaa||buffer[1]!=0xaa){
-            printf("不存在文件系统，准备创建。。。\n");
+	FILE *fp;
+	int i;
+	myvhard = (unsigned char *)malloc(SIZE);
+	memset(myvhard, 0, SIZE);
+	fp = fopen(filename, "r");
+
+	if (fp) {
+		fread(buffer, SIZE, 1, fp);
+		fclose(fp);
+		if (buffer[0] != 0xaa || buffer[1] != 0xaa) {
+            printf("myfsys文件系统不存在，现在开始创建文件系统\n");
             my_format();
         }
-    }
+		else {
+			for (i = 0; i < SIZE; i++) {
+				myvhard[i] = buffer[i];
+			}
+		}
+	}
+	else {
+		printf("myfsys文件系统不存在，现在开始创建文件系统\n");
+		my_format();
+	}
+
+	strcpy(openfilelist[0].filename, "root");  
+	strcpy(openfilelist[0].exname, "di");  
+	openfilelist[0].attribute = 0x2d;   
+	openfilelist[0].time = ((fcb *)(myvhard + 5 * BLOCKSIZE))->time;  
+	openfilelist[0].date = ((fcb *)(myvhard + 5 * BLOCKSIZE))->date;  
+	openfilelist[0].first = ((fcb *)(myvhard + 5 * BLOCKSIZE))->first;  
+	openfilelist[0].length = ((fcb *)(myvhard + 5 * BLOCKSIZE))->length;  
+	openfilelist[0].free = 1;  
+	openfilelist[0].dirno = 5;  
+	openfilelist[0].diroff = 0;  
+	openfilelist[0].count = 0;  
+	openfilelist[0].fcbstate = 0;  
+	openfilelist[0].topenfile = 0;  
+	//openfilelist[0].father = 0;    
+	memset(currentdir, 0, sizeof(currentdir));  
+	strcpy(currentdir, "\\root\\");   
+	strcpy(openfilelist->dir[0], currentdir);  
+	startp = ((block0 *)myvhard)->startblock;  
+	ptrcurdir = &openfilelist[0];  
+	curdir = 0;
 }
 
+void my_format() {
+	FILE *fp;
+	fat *fat1, *fat2;
+	block0 *b0;
+	time_t *now;
+	struct tm *nowtime;
+	unsigned char *p;
+	fcb *root;
+	int i;
 
-int main(int argc, const char * argv[]) {
-    // insert code here...
-    printf("Hello, World!\n");
-    return 0;
+	p = myvhard;
+	b0 = (block0 *)p;
+	fat1 = (fat *)(p + BLOCKSIZE);
+	fat2 = (fat *)(p + 3*BLOCKSIZE);
+	root = (fcb *)(myvhard + 5*BLOCKSIZE);
+	b0->fbnum = 0xaaaa;
+	b0->root = 5;
+	strcpy(b0->information, "My FileSys By Ya0wj\n");
+
+	for (i = 0; i < 5; i++) {
+		fat1->id = END;
+		fat2->id = END;
+		fat1++;
+		fat2++;
+	}
+
+	fat1->id = 6;
+	fat2->id = 6;
+	fat1++;
+	fat2++;
+
+	fat1->id = END;
+	fat2->id = END;
+	fat1++;
+	fat2++;
+
+	for (i = 7; i < SIZE / BLOCKSIZE; i++) {
+		(*fat1).id = FREE;
+		(*fat2).id = FREE;
+		fat1++;
+		fat2++;
+	}
+
+	now = time(NULL);
+	nowtime = localtime(&now);
+	strcpy(root->filename, ".");
+	strcpy(root-> exname, "");
+	root->attribute = 0x28;
+	root->time = nowtime->tm_hour * 2048 + nowtime->tm_min * 32 + nowtime->tm_sec / 2;
+	root->date = (nowtime->tm_year - 80) * 512 + (nowtime->tm_mon + 1) * 32 + nowtime->tm_mday;
+	root->first = 5;
+	root->length = 2 * sizeof(fcb);
+	root->free = 1;
+	root++;
+	
+	now = time(NULL);
+	nowtime = localtime(&now);
+	strcpy(root->filename, "..");
+	strcpy(root->exname, "");
+	root->attribute = 0x28;
+	root->time = nowtime->tm_hour * 2048 + nowtime->tm_min * 32 + nowtime->tm_sec / 2;
+	root->date = (nowtime->tm_year - 80) * 512 + (nowtime->tm_mon + 1) * 32 + nowtime->tm_mday;
+	root->first = 5;
+	root->length = 2 * sizeof(fcb);
+	root->free = 1;
+	
+	fp = fopen(filename, "w");
+	fwrite(myvhard, SIZE, 1, fp);
+	fclose(fp);
+}
+
+void my_cd(char *dirname) {
+	char *dir;
+	int fd;
+	dir = strtok(dirname, "\\");
+	if (strcmp(dir, ".") == 0)
+		return;
+	else if (strcmp(dir, "..") == 0){
+		if (curdir)
+			curdir = my_close(curdir);
+		return;
+	}
+	else if (strcmp(dir, "root") == 0) {
+		while (curdir)
+			curdir = my_close(curdir);
+		dir = strtok(NULL, "\\");
+	}
+	while (dir) {
+		fd = my_open(dir);
+		if (fd != -1)
+		 curdir = fd;
+		else return;
+			dir = strtok(NULL, "\\");
+	}
+}
+
+void my_mkdir(char *dirname) {
+	fcb *fcbptr,*fcbptr2;
+    fat *fat1, *fat2, *fatptr1, *fatptr2;
+    char text[MAXTEXT], text2[MAXTEXT];
+    unsigned short blkno;
+    int rbn, rbn2, fd, i, j;
+    fat1 = (fat *)(myvhard + BLOCKSIZE);
+    fat2 = (fat *)(myvhard + 3 * BLOCKSIZE);
+    if(strcmp(dirname, ".") == 0 || strcmp(dirname, "..") == 0){
+		printf("Error,can't remove this directory.\n");
+        return;
+    }
+    openfilelist[curdir].count = 0;
+    rbn = do_read(curdir, openfilelist[curdir].length, text);
+	fcbptr = (fcb *)text;
+    for(i = 0; i < rbn / sizeof(fcb); i++){//查找要删除的目录
+        if(strcmp(fcbptr->filename, dirname) == 0 && strcmp(fcbptr->exname, "") == 0)
+            break;
+        fcbptr++;
+    }
+    if(i == rbn / sizeof(fcb)){
+        printf("Error,the directory is not exist.\n");
+        return;
+    }
+    fd = my_open(dirname);//目录在当前打开文件数组中的下标
+    rbn2 = do_read(fd, openfilelist[fd].length, text2);//读取要删除的目录的内容
+    fcbptr2 = (fcb *)text2;
+    for(j = 0; j < rbn2 / sizeof(fcb); j++){//判断要删除目录是否为空
+        if(strcmp(fcbptr2->filename, ".") && strcmp(fcbptr2->filename, "..") && strcmp(fcbptr2->filename, "")){     
+            my_close(fd);
+            printf("Error,the directory is not empty.\n");
+            return;
+        }
+        fcbptr2++;
+    }
+    blkno = openfilelist[fd].first;
+    while(blkno != END)//修改要删除目录在fat中所占用的目录项的属性
+    {
+        fatptr1 = fat1 + blkno;
+        fatptr2 = fat2 + blkno;
+        blkno = fatptr1->id;
+        fatptr1->id = FREE;
+        fatptr2->id = FREE;
+    }
+    my_close(fd);
+    strcpy(fcbptr->filename, "");//修改已删除目录在当前目录的fcb的属性
+    fcbptr->free = 0;
+    openfilelist[curdir].count = i * sizeof(fcb);//更新当前目录文件的内容
+    do_write(curdir, (char *)fcbptr, sizeof(fcb), 2);
+    openfilelist[curdir].fcbstate = 1;
+}
+
+void my_rmdir(char *dirname){
+	fcb *fcbptr, *fcbptr2;
+	fat *fat1, *fat2, *fatptr1, *fatptr2;
+	char text[MAXTEXT], text2[MAXTEXT];
+	unsigned short blkno;
+	int rbn, rbn2, fd, i, j;
+	fat1 = (fat *)(myvhard + BLOCKSIZE);
+	fat2 = (fat *)(myvhard + 3 * BLOCKSIZE);
+	if (strcmp(dirname, ".") == 0 || strcmp(dirname, "..") == 0)
+	{
+		printf("Error,can't remove this directory.\n");
+		return;
+	}
+	openfilelist[curdir].count = 0;
+	rbn = do_read(curdir, openfilelist[curdir].length, text);
+	fcbptr = (fcb *)text;
+	for (i = 0; i < rbn / sizeof(fcb); i++)//查找要删除的目录
+	{
+		if (strcmp(fcbptr->filename, dirname) == 0 && strcmp(fcbptr->exname, "") == 0)
+			break;
+		fcbptr++;
+	}
+	if (i == rbn / sizeof(fcb))
+	{
+		printf("Error,the directory is not exist.\n");
+		return;
+	}
+	fd = my_open(dirname);//目录在当前打开文件数组中的下标
+	rbn2 = do_read(fd, openfilelist[fd].length, text2);//读取要删除的目录的内容
+	fcbptr2 = (fcb *)text2;
+	for (j = 0; j < rbn2 / sizeof(fcb); j++)//判断要删除目录是否为空
+	{
+		if (strcmp(fcbptr2->filename, ".") && strcmp(fcbptr2->filename, "..") && strcmp(fcbptr2->filename, ""))
+		{
+			my_close(fd);
+			printf("Error,the directory is not empty.\n");
+			return;
+		}
+		fcbptr2++;
+	}
+	blkno = openfilelist[fd].first;
+	while (blkno != END)//修改要删除目录在fat中所占用的目录项的属性
+	{
+		fatptr1 = fat1 + blkno;
+		fatptr2 = fat2 + blkno;
+		blkno = fatptr1->id;
+		fatptr1->id = FREE;
+		fatptr2->id = FREE;
+	}
+	my_close(fd);
+	strcpy(fcbptr->filename, "");//修改已删除目录在当前目录的fcb的属性
+	fcbptr->free = 0;
+	openfilelist[curdir].count = i * sizeof(fcb);//更新当前目录文件的内容
+	do_write(curdir, (char *)fcbptr, sizeof(fcb), 2);
+	openfilelist[curdir].fcbstate = 1;
+}
+void my_ls()
+{
+	fcb *fcbptr;
+	char text[MAXTEXT];
+	int rbn, i;
+	openfilelist[curdir].count = 0;
+	rbn = do_read(curdir, openfilelist[curdir].length, text);
+	fcbptr = (fcb *)text;
+	for (i = 0; i < rbn / sizeof(fcb); i++)
+	{
+		if (fcbptr->free)
+		{
+			if (fcbptr->attribute & 0x20)
+				printf("%s\\\t\t<DIR>\t\t%d/%d/%d\t%02d:%02d:%02d\n", fcbptr->filename, (fcbptr->date >> 9) + 1980, (fcbptr->date >> 5) & 0x000f, fcbptr->date & 0x001f, fcbptr->time >> 11, (fcbptr->time >> 5) & 0x003f, fcbptr->time & 0x001f * 2);
+			else
+				printf("%s.%s\t\t%dB\t\t%d/%d/%d\t%02d:%02d:%02d\t\n", fcbptr->filename, fcbptr->exname, (int)(fcbptr->length), (fcbptr->date >> 9) + 1980, (fcbptr->date >> 5) & 0x000f, fcbptr->date & 0x1f, fcbptr->time >> 11, (fcbptr->time >> 5) & 0x3f, fcbptr->time & 0x1f * 2);
+		}
+		fcbptr++;
+	}
+}
+void my_create(char *filename)
+{
+	fcb *fcbptr;
+	fat *fat1, *fat2;
+	char *fname, *exname, text[MAXTEXT];
+	unsigned short blkno;
+	int rbn, i;
+	time_t now;
+	struct tm *nowtime;
+	fat1 = (fat *)(myvhard + BLOCKSIZE);
+	fat2 = (fat *)(myvhard + BLOCKSIZE);
+	fname = strtok(filename, ".");
+	exname = strtok(NULL, ".");
+	if (strcmp(fname, "") == 0)
+	{
+		printf("Error,creating file must have a right name.\n");
+		return;
+	}
+	if (!exname)
+	{
+		printf("Error,creating file must have a extern name.\n");
+		return;
+	}
+	openfilelist[curdir].count = 0;
+	rbn = do_read(curdir, openfilelist[curdir].length, text);
+	fcbptr = (fcb *)text;
+	for (i = 0; i < rbn / sizeof(fcb); i++)
+	{
+		if (strcmp(fcbptr->filename, fname) == 0 && strcmp(fcbptr->exname, exname) == 0)
+		{
+			printf("Error,the filename is already exist!\n");
+			return;
+		}
+		fcbptr++;
+	}
+	fcbptr = (fcb *)text;
+	for (i = 0; i < rbn / sizeof(fcb); i++)
+	{
+		if (fcbptr->free == 0)
+			break;
+		fcbptr++;
+	}	
+	blkno = findblock();
+	if (blkno == -1)
+		return;
+	(fat1 + blkno)->id = END;
+	(fat2 + blkno)->id = END;
+	now = time(NULL);
+	nowtime = localtime(&now);
+	strcpy(fcbptr->filename, fname);
+	strcpy(fcbptr->exname, exname);
+	fcbptr->attribute = 0x00;
+	fcbptr->time = nowtime->tm_hour * 2048 + nowtime->tm_min * 32 + nowtime->tm_sec / 2;
+	fcbptr->date = (nowtime->tm_year - 80) * 512 + (nowtime->tm_mon + 1) * 32 + nowtime->tm_mday;
+	fcbptr->first = blkno;
+	fcbptr->length = 0;
+	fcbptr->free = 1;
+	openfilelist[curdir].count = i * sizeof(fcb);
+	do_write(curdir, (char *)fcbptr, sizeof(fcb), 2);
+	fcbptr = (fcb *)text;
+	fcbptr->length = openfilelist[curdir].length;
+	openfilelist[curdir].count = 0;
+	do_write(curdir, (char *)fcbptr, sizeof(fcb), 2);
+	openfilelist[curdir].fcbstate = 1;
+}
+void my_rm(char *filename)
+{
+	fcb *fcbptr;
+	fat *fat1, *fat2, *fatptr1, *fatptr2;
+	char *fname, *exname, text[MAXTEXT];
+	unsigned short blkno;
+	int rbn, i;
+	fat1 = (fat *)(myvhard + BLOCKSIZE);
+	fat2 = (fat *)(myvhard + 3 * BLOCKSIZE);
+	fname = strtok(filename, ".");
+	exname = strtok(NULL, ".");
+	if (strcmp(fname, "") == 0)
+	{
+		printf("Error,removing file must have a right name.\n");
+		return;
+	}
+	if (!exname)
+	{
+		printf("Error,removing file must have a extern name.\n");
+		return;
+	}
+	openfilelist[curdir].count = 0;
+	rbn = do_read(curdir, openfilelist[curdir].length, text);	fcbptr = (fcb *)text;
+	for (i = 0; i < rbn / sizeof(fcb); i++)
+	{
+		if (strcmp(fcbptr->filename, fname) == 0 && strcmp(fcbptr->exname, exname) == 0)
+			break;
+		fcbptr++;
+	}
+	if (i == rbn / sizeof(fcb))
+	{
+		printf("Error,the file is not exist.\n");
+		return;
+	}
+	blkno = fcbptr->first;
+	while (blkno != END)
+	{
+		fatptr1 = fat1 + blkno;
+		fatptr2 = fat2 + blkno;
+		blkno = fatptr1->id;
+		fatptr1->id = FREE;
+		fatptr2->id = FREE;
+	}
+	strcpy(fcbptr->filename, "");
+	fcbptr->free = 0;
+	openfilelist[curdir].count = i * sizeof(fcb);
+	do_write(curdir, (char *)fcbptr, sizeof(fcb), 2);
+	openfilelist[curdir].fcbstate = 1;
+}
+int my_open(char *filename)
+{
+	fcb *fcbptr;
+	char *fname, exname[3], *str, text[MAXTEXT];
+	int rbn, fd, i;
+	fname = strtok(filename, ".");
+	str = strtok(NULL, ".");
+	if (str)
+		strcpy(exname, str);
+	else
+		strcpy(exname, "");
+	for (i = 0; i < MAXOPENFILE; i++)//在用户打开文件数组查找看当前文件是否已经打开
+	{
+		if (strcmp(openfilelist[i].filename, fname) == 0 && strcmp(openfilelist[i].exname, exname) == 0 && i != curdir)
+		{
+			printf("Error,the file is already open.\n");
+			return -1;
+		}
+	}
+	openfilelist[curdir].count = 0;
+	rbn = do_read(curdir, openfilelist[curdir].length, text);
+	fcbptr = (fcb *)text;
+	for (i = 0; i < rbn / sizeof(fcb); i++)//在当前目录下找要打开的文件是否存在
+	{
+		if (strcmp(fcbptr->filename, fname) == 0 && strcmp(fcbptr->exname, exname) == 0)
+			break;
+		fcbptr++;
+	}
+	if (i == rbn / sizeof(fcb))
+	{
+		printf("Error,the file is not exist.\n");
+		return -1;
+	}
+	fd = findopenfile();//寻找空闲文件表项
+	if (fd == -1)
+		return -1;
+	strcpy(openfilelist[fd].filename, fcbptr->filename);
+	strcpy(openfilelist[fd].exname, fcbptr->exname);
+	openfilelist[fd].attribute = fcbptr->attribute;
+	openfilelist[fd].time = fcbptr->time;
+	openfilelist[fd].date = fcbptr->date;
+	openfilelist[fd].first = fcbptr->first;
+	openfilelist[fd].length = fcbptr->length;
+	openfilelist[fd].free = fcbptr->free;
+	openfilelist[fd].dirno = openfilelist[curdir].first;
+	openfilelist[fd].diroff = i;
+	strcpy(openfilelist[fd].dir, openfilelist[curdir].dir);
+	strcat(openfilelist[fd].dir, filename);	if (fcbptr->attribute & 0x20)
+		strcat(openfilelist[fd].dir, "\\");
+	openfilelist[fd].father = curdir;
+	openfilelist[fd].count = 0;
+	openfilelist[fd].fcbstate = 0;
+	openfilelist[fd].topenfile = 1;
+	return fd;
+}
+int my_close(int fd)
+{
+	fcb *fcbptr;
+	int father;
+	if (fd < 0 || fd >= MAXOPENFILE)
+	{
+		printf("Error,the file is not exist.\n");
+		return -1;
+	}
+	if (openfilelist[fd].fcbstate)
+	{
+		fcbptr = (fcb *)malloc(sizeof(fcb));
+		strcpy(fcbptr->filename, openfilelist[fd].filename);
+		strcpy(fcbptr->exname, openfilelist[fd].exname);
+		fcbptr->attribute = openfilelist[fd].attribute;
+		fcbptr->time = openfilelist[fd].time;
+		fcbptr->date = openfilelist[fd].date;
+		fcbptr->first = openfilelist[fd].first;
+		fcbptr->length = openfilelist[fd].length;
+		fcbptr->free = openfilelist[fd].free;
+		father = openfilelist[fd].father;
+		openfilelist[father].count = openfilelist[fd].diroff * sizeof(fcb);
+		do_write(father, (char *)fcbptr, sizeof(fcb), 2);
+		free(fcbptr);
+		openfilelist[fd].fcbstate = 0;
+	}
+	strcpy(openfilelist[fd].filename, "");
+	strcpy(openfilelist[fd].exname, "");
+	openfilelist[fd].topenfile = 0;
+	return father;
+}
+int my_write(int fd)
+{
+	fat *fat1, *fat2, *fatptr1, *fatptr2;
+	int wstyle, len, ll, tmp;
+	char text[MAXTEXT];
+	unsigned short blkno;
+	fat1 = (fat *)(myvhard + BLOCKSIZE);
+	fat2 = (fat *)(myvhard + 3 * BLOCKSIZE);
+	if (fd < 0 || fd >= MAXOPENFILE)
+	{
+		printf("The file is not exist!\n");
+		return -1;
+	}
+	while (1)
+	{
+		printf("Please enter the number of write style:\n1.cut write\t2.cover write\t3.add write\n");
+		scanf("%d", &wstyle);
+		if (wstyle > 0 && wstyle < 4)
+			break;
+		printf("Input Error!");
+	}
+	getchar();
+	switch (wstyle)
+	{
+	case 1://截断写把原文件所占的虚拟磁盘空间重置为1
+		blkno = openfilelist[fd].first;
+		fatptr1 = fat1 + blkno;
+		fatptr2 = fat2 + blkno;
+		blkno = fatptr1->id;
+		fatptr1->id = END;
+		fatptr2->id = END;
+		while (blkno != END)
+		{
+			fatptr1 = fat1 + blkno;
+			fatptr2 = fat2 + blkno;
+			blkno = fatptr1->id;
+			fatptr1->id = FREE;
+			fatptr2->id = FREE;
+		}
+		openfilelist[fd].count = 0;
+		openfilelist[fd].length = 0;
+		break;
+	case 2:
+		openfilelist[fd].count = 0;
+		break;
+	case 3:
+		openfilelist[fd].count = openfilelist[fd].length;
+		break;
+	default:
+		break;
+	}
+	ll = 0;
+	printf("please input write data(end with Ctrl+Z):\n");
+	while (gets(text))
+	{
+		len = strlen(text);
+		text[len++] = '\n';
+		text[len] = '\0';
+		tmp = do_write(fd, text, len, wstyle);
+		if (tmp != -1)
+			ll += tmp;
+		if (tmp < len)
+		{
+			printf("Wirte Error!");
+			break;
+		}
+	}
+	return ll;//实际写的字节数
+}
+
+int do_write(int fd, char *text, int len, char wstyle)
+{
+	fat *fat1, *fat2, *fatptr1, *fatptr2;
+	unsigned char *buf, *blkptr;
+	unsigned short blkno, blkoff;
+	int i, ll;
+	fat1 = (fat *)(myvhard + BLOCKSIZE);
+	fat2 = (fat *)(myvhard + 3 * BLOCKSIZE);
+	buf = (unsigned char *)malloc(BLOCKSIZE);
+	if (buf == NULL)
+	{
+		printf("malloc failed!\n");
+		return -1;
+	}
+	blkno = openfilelist[fd].first;
+	blkoff = openfilelist[fd].count;
+	fatptr1 = fat1 + blkno;
+	fatptr2 = fat2 + blkno;
+	while (blkoff >= BLOCKSIZE)
+	{
+		blkno = fatptr1->id;
+		if (blkno == END)
+		{
+			blkno = findblock();
+			if (blkno == -1)
+			{
+				free(buf);
+				return -1;
+			}
+			fatptr1->id = blkno;
+			fatptr2->id = blkno;
+			fatptr1 = fat1 + blkno;
+			fatptr2 = fat2 + blkno;
+			fatptr1->id = END;
+			fatptr2->id = END;
+		}
+		else
+		{
+			fatptr1 = fat1 + blkno;
+			fatptr2 = fat2 + blkno;
+		}
+		blkoff = blkoff - BLOCKSIZE;//让blkoff定位到文件最后一个磁盘块的读写位置
+	}
+	ll = 0;//实际写的字节数
+	while (ll < len)//len是用户输入的字节数
+	{
+		blkptr = (unsigned char *)(myvhard + blkno * BLOCKSIZE);
+		for (i = 0; i < BLOCKSIZE; i++)
+			buf[i] = blkptr[i];
+		for (; blkoff < BLOCKSIZE; blkoff++)
+		{
+			buf[blkoff] = text[ll++];
+			openfilelist[fd].count++;
+			if (ll == len)
+				break;
+		}
+		for (i = 0; i < BLOCKSIZE; i++)
+			blkptr[i] = buf[i];
+		if (ll < len)//如果一个磁盘块写不下，则再分配一个磁盘块
+		{			blkno = fatptr1->id;
+			if (blkno == END)
+			{
+				blkno = findblock();
+				if (blkno == -1)
+					break;
+				fatptr1->id = blkno;
+				fatptr2->id = blkno;
+				fatptr1 = fat1 + blkno;
+				fatptr2 = fat2 + blkno;
+				fatptr1->id = END;
+				fatptr2->id = END;
+			}
+			else
+			{
+				fatptr1 = fat1 + blkno;
+				fatptr2 = fat2 + blkno;
+			}
+			blkoff = 0;
+		}
+	}
+	if (openfilelist[fd].count > openfilelist[fd].length)
+		openfilelist[fd].length = openfilelist[fd].count;
+	openfilelist[fd].fcbstate = 1;
+	free(buf);
+	return ll;
+}
+int my_read(int fd, int len)
+{
+	char text[MAXTEXT];
+	int ll;
+	if (fd < 0 || fd >= MAXOPENFILE)
+	{
+		printf("The File is not exist!\n");
+		return -1;
+	}
+	openfilelist[fd].count = 0;
+	ll = do_read(fd, len, text);//ll是实际读出的字节数
+	if (ll != -1)
+		printf("%s", text);
+	else
+		printf("Read Error!\n");
+	return ll;
+}
+int do_read(int fd, int len, char *text)
+{
+	fat *fat1, *fatptr;
+	unsigned char *buf, *blkptr;
+	unsigned short blkno, blkoff;
+	int i, ll;
+	fat1 = (fat *)(myvhard + BLOCKSIZE);
+	buf = (unsigned char *)malloc(BLOCKSIZE);
+	if (buf == NULL)
+	{
+		printf("malloc failed!\n");
+		return -1;
+	}
+	blkno = openfilelist[fd].first;
+	blkoff = openfilelist[fd].count;
+	if (blkoff >= openfilelist[fd].length)
+	{
+		puts("Read out of range!");
+		free(buf);
+		return -1;
+	}
+	fatptr = fat1 + blkno;
+	while (blkoff >= BLOCKSIZE)//blkoff为最后一块盘块剩余的容量
+	{
+		blkno = fatptr->id;
+		blkoff = blkoff - BLOCKSIZE;
+		fatptr = fat1 + blkno;
+	}
+	ll = 0;
+	while (ll < len)
+	{
+		blkptr = (unsigned char *)(myvhard + blkno * BLOCKSIZE);
+		for (i = 0; i < BLOCKSIZE; i++)//将最后一块盘块的内容读取到buf中
+			buf[i] = blkptr[i];
+		for (; blkoff < BLOCKSIZE; blkoff++)
+		{
+			text[ll++] = buf[blkoff];
+			openfilelist[fd].count++;
+			if (ll == len || openfilelist[fd].count == openfilelist[fd].length)
+				break;
+		}
+		if (ll < len && openfilelist[fd].count != openfilelist[fd].length)
+		{
+			blkno = fatptr->id;
+			if (blkno == END)
+				break;
+			blkoff = 0;
+			fatptr = fat1 + blkno;
+		}
+	}
+	text[ll] = '\0';
+	free(buf);
+	return ll;
+}
+void my_exitsys()
+{
+	FILE *fp;
+	while (curdir)
+		curdir = my_close(curdir);
+	fp = fopen(filename, "w");
+	fwrite(myvhard, SIZE, 1, fp);
+	fclose(fp);
+	free(myvhard);
+}
+unsigned short findblock()
+{
+	unsigned short i;
+	fat *fat1, *fatptr;
+	fat1 = (fat *)(myvhard + BLOCKSIZE);
+	for (i = 7; i < SIZE / BLOCKSIZE; i++)
+	{
+		fatptr = fat1 + i;
+		if (fatptr->id == FREE)
+			return i;
+	}
+	printf("Error,Can't find free block!\n");
+	return -1;
+}
+int findopenfile()
+{
+	int i;
+	for (i = 0; i < MAXTEXT; i++)
+	{
+		if (openfilelist[i].topenfile == 0)
+			return i;
+	}
+	printf("Error,open too many files!\n");
+	return -1;
+}
+int main()
+{
+	char cmd[15][10] = { "cd", "mkdir", "rmdir", "ls", "create", "rm", "open", "close", "write", "read", "exit" };
+	char s[30], *sp;
+	int cmdn, flag = 1, i;
+	startsys();
+	printf("*********************File System V1.0*******************************\n\n");
+	printf("命令名\t\t命令参数\t\t命令说明\n\n");
+	printf("cd\t\t目录名(路径名)\t\t切换当前目录到指定目录\n");
+	printf("mkdir\t\t目录名\t\t\t在当前目录创建新目录\n");
+	printf("rmdir\t\t目录名\t\t\t在当前目录删除指定目录\n");
+	printf("ls\t\t无\t\t\t显示当前目录下的目录和文件\n");
+	printf("create\t\t文件名\t\t\t在当前目录下创建指定文件\n");
+	printf("rm\t\t文件名\t\t\t在当前目录下删除指定文件\n");
+	printf("open\t\t文件名\t\t\t在当前目录下打开指定文件\n");
+	printf("write\t\t无\t\t\t在打开文件状态下，写该文件\n");
+	printf("read\t\t无\t\t\t在打开文件状态下，读取该文件\n");
+	printf("close\t\t无\t\t\t在打开文件状态下，读取该文件\n");
+	printf("exit\t\t无\t\t\t退出系统\n\n");
+	printf("*********************************************************************\n\n");
+	while (flag)
+	{
+		printf("%s>", openfilelist[curdir].dir);
+		gets(s);
+		cmdn = -1;
+		if (strcmp(s, ""))
+		{
+			sp = strtok(s, " ");
+			for (i = 0; i < 15; i++)
+			{
+				if (strcmp(sp, cmd[i]) == 0)
+				{
+					cmdn = i;
+					break;
+				}
+			}
+			//			printf("%d\n", cmdn);
+			switch (cmdn)
+			{
+			case 0:
+				sp = strtok(NULL, " ");
+				if (sp && (openfilelist[curdir].attribute & 0x20))
+					my_cd(sp);
+				else
+					printf("Please input the right command.\n");
+				break;
+			case 1:
+				sp = strtok(NULL, " ");
+				if (sp && (openfilelist[curdir].attribute & 0x20))
+					my_mkdir(sp);
+				else
+					printf("Please input the right command.\n");
+				break;
+			case 2:
+				sp = strtok(NULL, " ");
+				if (sp && (openfilelist[curdir].attribute & 0x20))
+					my_rmdir(sp);
+				else
+					printf("Please input the right command.\n");
+				break;
+			case 3:
+				if (openfilelist[curdir].attribute & 0x20)
+					my_ls();
+				else
+					printf("Please input the right command.\n");
+				break;
+			case 4:
+				sp = strtok(NULL, " ");
+				if (sp && (openfilelist[curdir].attribute & 0x20))
+					my_create(sp);
+				else
+					printf("Please input the right command.\n");
+				break;
+			case 5:
+				sp = strtok(NULL, " ");
+				if (sp && (openfilelist[curdir].attribute & 0x20))
+					my_rm(sp);
+				else
+					printf("Please input the right command.\n");
+				break;
+			case 6:
+				sp = strtok(NULL, " ");
+				if (sp && (openfilelist[curdir].attribute & 0x20))
+				{
+					if (strchr(sp, '.'))//查找sp中'.'首次出现的位置
+						curdir = my_open(sp);
+					else
+						printf("the openfile should have exname.\n");
+				}
+				else
+					printf("Please input the right command.\n");
+				break;
+			case 7:
+				if (!(openfilelist[curdir].attribute & 0x20))
+					curdir = my_close(curdir);
+				else
+					printf("No files opened.\n");
+				break;
+			case 8:
+				if (!(openfilelist[curdir].attribute & 0x20))
+					my_write(curdir);
+				else
+					printf("No files opened.\n");
+				break;
+			case 9:
+				if (!(openfilelist[curdir].attribute & 0x20))
+					my_read(curdir, openfilelist[curdir].length);
+				else
+					printf("No files opened.\n");
+				break;
+			case 10:
+				if (openfilelist[curdir].attribute & 0x20){
+					my_exitsys();
+					flag = 0;
+				}
+				else
+					printf("Please input the right command.\n");
+				break;
+			default:
+				printf("Please input the right command.\n");
+				break;
+			}
+		}
+	}
+	return 0;
 }
